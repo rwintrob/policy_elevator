@@ -385,6 +385,34 @@ function renderRequestsTable(requests) {
             verifyIndicator = `<div class="verify-badge">✓ Verified Removed</div>`;
         }
 
+        // Watchdog Agent Telemetry Status Column
+        let watchdogBadge = `<span class="badge" style="background: rgba(255, 255, 255, 0.05); color: var(--slate-400);">Inactive</span>`;
+        if (req.status === "ACTIVE") {
+            const opsCount = req.watchdog_summary ? req.watchdog_summary.detected_operations_count : 0;
+            watchdogBadge = `
+                <div style="display: flex; flex-direction: column; gap: 0.2rem;">
+                    <button class="btn btn-sm btn-outline-info" onclick="openWatchdogModal('${req.request_id}')" title="View Watchdog live operation monitoring">
+                        🛡️ Watching (${opsCount} ops)
+                    </button>
+                    <button class="btn btn-sm btn-outline" style="font-size:0.7rem;" onclick="simulateWatchdogActivity('${req.request_id}')" title="Simulate user performing elevated GCP operation">
+                        ⚡ Simulate Op
+                    </button>
+                </div>
+            `;
+        } else if (req.watchdog_summary && req.watchdog_summary.auto_rollback_triggered) {
+            watchdogBadge = `
+                <button class="btn btn-sm btn-outline-success" onclick="openWatchdogModal('${req.request_id}')" title="Watchdog auto-rolled back after operation completed">
+                    ✓ Auto-Rolled Back (${req.watchdog_summary.detected_operations_count} ops)
+                </button>
+            `;
+        } else if (req.watchdog_summary) {
+            watchdogBadge = `
+                <button class="btn btn-sm btn-outline" onclick="openWatchdogModal('${req.request_id}')" title="View Watchdog log">
+                    🛡️ Log (${req.watchdog_summary.detected_operations_count} ops)
+                </button>
+            `;
+        }
+
         html += `
             <tr>
                 <td><code>#${req.request_id}</code></td>
@@ -407,6 +435,7 @@ function renderRequestsTable(requests) {
                 <td title="${escapeHtml(req.justification)}">${truncateText(escapeHtml(req.justification), 30)}</td>
                 <td>${statusBadge}</td>
                 <td>${remainingTimeText}</td>
+                <td>${watchdogBadge}</td>
                 <td>
                     <div style="display: flex; flex-direction: column; gap: 0.3rem;">
                         <div>${actionButtons}</div>
@@ -999,4 +1028,115 @@ function truncateText(str, length) {
 function escapeHtml(str) {
     if (!str) return "";
     return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+// Watchdog Modal Handlers
+function openWatchdogModal(requestId) {
+    const modal = document.getElementById("watchdog-modal");
+    if (modal) modal.classList.add("open");
+    fetchAndRenderWatchdogTelemetry(requestId);
+}
+
+function closeWatchdogModal() {
+    const modal = document.getElementById("watchdog-modal");
+    if (modal) modal.classList.remove("open");
+}
+
+async function fetchAndRenderWatchdogTelemetry(requestId) {
+    const modalBody = document.getElementById("watchdog-modal-body");
+    if (!modalBody) return;
+
+    modalBody.innerHTML = `<div class="text-center py-4">Fetching Watchdog Agent Telemetry for #${requestId}...</div>`;
+
+    try {
+        const res = await fetch(`/api/requests/${requestId}/watchdog`);
+        if (!res.ok) {
+            modalBody.innerHTML = `<div class="alert alert-warning">No watchdog telemetry recorded yet for #${requestId}.</div>`;
+            return;
+        }
+
+        const summary = await res.json();
+        if (!summary) {
+            modalBody.innerHTML = `<div class="alert alert-info">Watchdog Agent is initialized and waiting for requester activity on #${requestId}.</div>`;
+            return;
+        }
+
+        let opsHtml = "";
+        if (summary.operations && summary.operations.length > 0) {
+            summary.operations.forEach((op, idx) => {
+                const ts = new Date(op.timestamp).toLocaleTimeString();
+                opsHtml += `
+                    <tr style="font-size:0.85rem;">
+                        <td>#${idx + 1}</td>
+                        <td><code>${escapeHtml(op.method_name)}</code></td>
+                        <td>${ts}</td>
+                        <td><code>${escapeHtml(op.resource_name)}</code></td>
+                        <td><span style="color:var(--emerald-500); font-weight:bold;">${escapeHtml(op.status)}</span></td>
+                    </tr>
+                `;
+            });
+        } else {
+            opsHtml = `<tr><td colspan="5" class="text-center text-muted py-3">No elevated GCP operations detected yet. Watching Cloud Audit Logs...</td></tr>`;
+        }
+
+        let rollbackBanner = "";
+        if (summary.auto_rollback_triggered) {
+            rollbackBanner = `
+                <div class="alert alert-info" style="margin-bottom:1rem;">
+                    <h4>🛡️ Watchdog Auto-Rollback Executed</h4>
+                    <p style="margin-top:0.3rem;">${escapeHtml(summary.rollback_reason)}</p>
+                    <p style="font-size:0.8rem; margin-top:0.2rem; color:var(--emerald-500);">✓ Elevated permissions automatically revoked & verified removed.</p>
+                </div>
+            `;
+        }
+
+        modalBody.innerHTML = `
+            ${rollbackBanner}
+            <div style="margin-bottom:1rem; display:flex; justify-content:space-between; align-items:center;">
+                <div>
+                    <strong>Monitoring State:</strong> <span class="badge badge-info">${escapeHtml(summary.state)}</span>
+                </div>
+                <div>
+                    <strong>Detected Ops:</strong> <code>${summary.detected_operations_count}</code>
+                </div>
+            </div>
+            <h5>Chronological Cloud Audit Logs Operations</h5>
+            <div class="table-responsive" style="max-height:250px; overflow-y:auto; margin-top:0.5rem;">
+                <table class="data-table" style="font-size:0.85rem;">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Method / Action</th>
+                            <th>Time</th>
+                            <th>Resource</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${opsHtml}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (err) {
+        modalBody.innerHTML = `<div class="alert alert-danger">Error loading watchdog telemetry: ${err}</div>`;
+    }
+}
+
+async function simulateWatchdogActivity(requestId) {
+    try {
+        const res = await fetch(`/api/requests/${requestId}/watchdog/simulate`, {
+            method: "POST"
+        });
+        if (res.ok) {
+            await loadRequests();
+            await loadAuditLogs();
+            openWatchdogModal(requestId);
+        } else {
+            const errData = await res.json();
+            alert("Could not simulate watchdog activity: " + (errData.detail || "Unknown error"));
+        }
+    } catch (err) {
+        alert("Simulation failed: " + err);
+    }
 }

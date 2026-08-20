@@ -52,6 +52,30 @@ class VerificationResult(BaseModel):
     policy_etag: Optional[str] = Field(None, description="ETag of the project IAM policy at verification time")
     details: str = Field(..., description="Detailed message explaining verification status")
 
+class WatchdogActivityState(str, Enum):
+    IDLE = "IDLE"
+    ACTIVITY_DETECTED = "ACTIVITY_DETECTED"
+    OPERATION_IN_PROGRESS = "OPERATION_IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    AUTO_REVOKED = "AUTO_REVOKED"
+
+class DetectedOperation(BaseModel):
+    method_name: str = Field(..., description="GCP API Method Name (e.g. google.cloud.orgpolicy.v2.OrgPolicy.UpdatePolicy)")
+    timestamp: datetime = Field(default_factory=utc_now, description="Timestamp when operation was recorded in Cloud Audit Logs")
+    principal_email: str = Field(..., description="Requester email performing operation")
+    resource_name: str = Field(..., description="Target GCP resource name operated upon")
+    status: str = Field("SUCCESS", description="Execution status of operation")
+
+class WatchdogSummary(BaseModel):
+    request_id: str = Field(..., description="Target elevation request ID")
+    state: WatchdogActivityState = Field(default=WatchdogActivityState.IDLE, description="Current watchdog monitoring state")
+    detected_operations_count: int = Field(0, description="Total count of detected operations performed under elevation")
+    operations: List[DetectedOperation] = Field(default_factory=list, description="Chronological log of detected GCP API operations")
+    last_activity_at: Optional[datetime] = Field(None, description="Timestamp of most recent detected activity")
+    completed_at: Optional[datetime] = Field(None, description="Timestamp when Watchdog determined operation completed")
+    auto_rollback_triggered: bool = Field(False, description="Whether automatic rollback and early permission revocation was executed")
+    rollback_reason: Optional[str] = Field(None, description="Explanation for automatic rollback trigger")
+
 class ElevationRequest(BaseModel):
     request_id: str = Field(..., description="Unique request identifier")
     requester_email: str = Field(..., description="Email of requester")
@@ -68,6 +92,7 @@ class ElevationRequest(BaseModel):
     revoked_at: Optional[datetime] = Field(None, description="Revocation timestamp")
     approval_comments: Optional[str] = Field(None, description="Approver comments")
     verification_result: Optional[VerificationResult] = Field(None, description="Permission removal verification proof")
+    watchdog_summary: Optional[WatchdogSummary] = Field(None, description="Watchdog activity monitoring and auto-rollback telemetry")
 
 class AuditLogEntry(BaseModel):
     event_id: str = Field(..., description="Unique audit event ID")

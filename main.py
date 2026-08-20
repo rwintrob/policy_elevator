@@ -20,15 +20,18 @@ from models import (
     IdentityCheckResult,
     RoleOption,
     VerificationResult,
+    WatchdogSummary,
 )
 from iam_manager import IAMManager
 from audit import AuditManager
+from watchdog import WatchdogAgent
 
 BASE_DIR = Path(__file__).resolve().parent
 
 # Initialize managers
 iam_mgr = IAMManager()
 audit_mgr = AuditManager()
+watchdog_agent = WatchdogAgent()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -137,14 +140,18 @@ def get_current_user_identity(request: Request) -> str:
     return os.environ.get("GCP_DEFAULT_USER", "admin@rwintrob.altostrat.com")
 
 async def auto_revocation_loop():
-    """Background worker loop checking for expired active JIT grants every 10 seconds."""
+    """Background worker loop checking for expired active JIT grants and running Watchdog Agent monitoring every 3 seconds."""
     while True:
         try:
+            # 1. Run Watchdog Agent activity monitoring and auto-rollback check
+            await watchdog_agent.check_and_process_watchdog_loop(iam_mgr, audit_mgr)
+
+            # 2. Check for max-duration time expiration
             now = datetime.now(timezone.utc)
             requests = audit_mgr.list_requests()
             for req in requests:
                 if req.status == ElevationStatus.ACTIVE and req.expires_at and now >= req.expires_at:
-                    logger_msg = f"Auto-revoking expired JIT grant {req.request_id} ({req.role}) for {req.requester_email} on project {req.target_project_id}"
+                    logger_msg = f"Auto-revoking max-duration expired JIT grant {req.request_id} ({req.role}) for {req.requester_email} on project {req.target_project_id}"
                     print(logger_msg)
                     
                     req.status = ElevationStatus.REVOKING
@@ -174,7 +181,7 @@ async def auto_revocation_loop():
         except Exception as e:
             print(f"Error in auto_revocation_loop: {e}")
         
-        await asyncio.sleep(10)
+        await asyncio.sleep(3)
 
 # Dashboard Route
 @app.get("/", response_class=HTMLResponse)
@@ -328,6 +335,11 @@ async def process_approval(request_id: str, action: ApprovalAction, request: Req
     req.approved_at = datetime.now(timezone.utc)
     req.expires_at = datetime.now(timezone.utc) + timedelta(minutes=req.duration_minutes)
     req.approval_comments = action.comments
+
+    # Start Watchdog Agent activity monitoring
+    watchdog_summary = watchdog_agent.start_monitoring(req)
+    req.watchdog_summary = watchdog_summary
+
     audit_mgr.save_request(req)
 
     audit_mgr.log_event(
@@ -338,10 +350,54 @@ async def process_approval(request_id: str, action: ApprovalAction, request: Req
         role=req.role,
         requester_email=req.requester_email,
         approver_email=approver,
-        payload={"expires_at": req.expires_at.isoformat(), "policy_etag": etag, "message": msg, "role": req.role}
+        payload={"expires_at": req.expires_at.isoformat(), "policy_etag": etag, "message": msg, "role": req.role, "watchdog_monitoring": "STARTED"}
     )
 
     return req
+
+# Watchdog Agent API Endpoints
+@app.get("/api/requests/{request_id}/watchdog", response_model=Optional[WatchdogSummary])
+async def get_request_watchdog_telemetry(request_id: str):
+    req = audit_mgr.get_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    summary = watchdog_agent.get_summary(request_id) or req.watchdog_summary
+    return summary
+
+@app.post("/api/requests/{request_id}/watchdog/simulate")
+async def simulate_watchdog_activity(request_id: str, method_name: Optional[str] = None):
+    req = audit_mgr.get_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if req.status != ElevationStatus.ACTIVE:
+        raise HTTPException(status_code=400, detail="Can only simulate activity on ACTIVE JIT grants")
+    
+    op = watchdog_agent.trigger_simulated_activity(req, method_name)
+    summary = watchdog_agent.get_summary(request_id)
+    req.watchdog_summary = summary
+    audit_mgr.save_request(req)
+
+    audit_mgr.log_event(
+        event_type="WATCHDOG_ACTIVITY_DETECTED",
+        request_id=req.request_id,
+        actor_email="system:watchdog_agent",
+        target_project_id=req.target_project_id,
+        role=req.role,
+        requester_email=req.requester_email,
+        approver_email=req.actual_approver or req.approver_email,
+        payload={"simulated_operation": op.model_dump(mode="json")}
+    )
+    return {"status": "SUCCESS", "operation": op, "summary": summary}
+
+@app.get("/api/watchdog/status")
+async def get_watchdog_agent_status():
+    monitored = watchdog_agent.list_monitored_grants()
+    return {
+        "watchdog_status": "ACTIVE",
+        "idle_quiet_threshold_seconds": watchdog_agent.idle_quiet_seconds,
+        "monitored_grants_count": len(monitored),
+        "monitored_grants": monitored
+    }
 
 @app.post("/api/requests/{request_id}/revoke", response_model=ElevationRequest)
 async def revoke_elevation_grant(request_id: str, request: Request):

@@ -300,3 +300,49 @@ def test_custom_role_elevation_flow():
     assert verify_resp.status_code == 200
     assert verify_resp.json()["verified_removed"] is True
 
+def test_watchdog_agent_monitoring_and_simulation():
+    """Verify Watchdog agent monitors active grant, detects operations, and tracks activity telemetry."""
+    # 1. Create request
+    payload = {
+        "requester_email": "alice.watchdog@rwintrob.altostrat.com",
+        "target_project_id": "prj-watchdog-01",
+        "role": "roles/orgpolicy.policyAdmin",
+        "justification": "Watchdog monitoring test elevation",
+        "duration_minutes": 15,
+        "approver_email": "bob.approver@rwintrob.altostrat.com"
+    }
+    req_resp = client.post("/api/requests", json=payload)
+    req_id = req_resp.json()["request_id"]
+
+    # 2. Approve request -> Watchdog monitoring starts
+    app_resp = client.post(f"/api/requests/{req_id}/approve", json={
+        "approver_email": "bob.approver@rwintrob.altostrat.com",
+        "approved": True
+    })
+    assert app_resp.status_code == 200
+    assert app_resp.json()["watchdog_summary"] is not None
+
+    # 3. Simulate GCP operation activity detected by Watchdog
+    sim_resp = client.post(f"/api/requests/{req_id}/watchdog/simulate")
+    assert sim_resp.status_code == 200
+    sim_data = sim_resp.json()
+    assert sim_data["status"] == "SUCCESS"
+    assert sim_data["summary"]["detected_operations_count"] >= 1
+
+    # 4. Get Watchdog Telemetry endpoint
+    telemetry_resp = client.get(f"/api/requests/{req_id}/watchdog")
+    assert telemetry_resp.status_code == 200
+    tel_data = telemetry_resp.json()
+    assert tel_data["request_id"] == req_id
+    assert len(tel_data["operations"]) >= 1
+
+def test_watchdog_status_endpoint():
+    """Verify system-wide Watchdog Agent status endpoint."""
+    resp = client.get("/api/watchdog/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["watchdog_status"] == "ACTIVE"
+    assert "idle_quiet_threshold_seconds" in data
+    assert "monitored_grants_count" in data
+
+

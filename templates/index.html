@@ -85,12 +85,13 @@
                                 <th>Justification</th>
                                 <th>Status</th>
                                 <th>Remaining Time</th>
+                                <th>🛡️ Watchdog Agent</th>
                                 <th>Actions & Verification</th>
                             </tr>
                         </thead>
                         <tbody id="requests-table-body">
                             <tr>
-                                <td colspan="9" class="text-center py-4 text-muted">Loading requests...</td>
+                                <td colspan="10" class="text-center py-4 text-muted">Loading requests...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -301,6 +302,22 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-primary" onclick="closeVerifyModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Watchdog Telemetry Modal -->
+    <div id="watchdog-modal" class="modal-backdrop">
+        <div class="modal-content modal-md">
+            <div class="modal-header">
+                <h3>🛡️ Watchdog Agent Monitoring Telemetry</h3>
+                <button class="close-btn" onclick="closeWatchdogModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="watchdog-modal-body">
+                <div class="text-center py-4">Fetching Watchdog activity logs...</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeWatchdogModal()">Close</button>
             </div>
         </div>
     </div>
