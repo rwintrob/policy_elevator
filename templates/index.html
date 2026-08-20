@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JIT Org Policy Permission Elevator | GCP Security Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css?v={{ v }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navigation Bar -->
+        <header class="navbar">
+            <div class="nav-brand">
+                <div class="shield-icon">🛡️</div>
+                <div class="brand-text">
+                    <h1>JIT Org Policy Elevator</h1>
+                    <span class="subtext">Just-In-Time IAM Scoped Elevation for GCP Project Org Policies</span>
+                </div>
+            </div>
+            <div class="nav-user">
+                <div class="user-pill-container">
+                    <span class="user-badge" id="current-user-badge" onclick="promptSwitchUser()" title="Click to switch active identity">👤 <span id="current-user-text">{{ user_email }}</span> <span class="badge-edit-hint">✎ Switch</span></span>
+                    <span class="eligibility-pill" id="nav-eligibility-pill" title="{{ eligibility_msg }}"><span class="pill-dot"></span> <span id="nav-eligibility-text">Authorized Domain</span></span>
+                </div>
+                <button class="btn btn-primary" id="btn-new-request" onclick="openRequestModal()">+ New Elevation Request</button>
+            </div>
+        </header>
+
+        <!-- Identity Eligibility Alert (Hidden if eligible) -->
+        <div id="ineligible-warning-banner" class="alert alert-danger ineligible-banner" style="display: none;">
+            <div class="banner-content">
+                <span class="banner-icon">⚠️</span>
+                <div>
+                    <strong>Ineligible Identity Active:</strong> <span id="ineligible-user-email"></span> is not authorized to request or approve JIT elevations.
+                    <div class="banner-subtext" id="ineligible-reason-text">Domain is not in authorized list ({{ allowed_domains }}).</div>
+                </div>
+            </div>
+            <button class="btn btn-sm btn-outline-danger" onclick="promptSwitchUser()">Switch to Eligible Identity</button>
+        </div>
+
+        <!-- Main Dashboard Content -->
+        <main class="dashboard-grid">
+            <!-- Stats / Summary Row -->
+            <section class="metrics-row">
+                <div class="card metric-card">
+                    <div class="metric-value text-amber" id="stat-pending">0</div>
+                    <div class="metric-label">Pending Approval</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-value text-emerald" id="stat-active">0</div>
+                    <div class="metric-label">Active JIT Grants</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-value text-indigo" id="stat-verified">0</div>
+                    <div class="metric-label">Verified Revocations</div>
+                </div>
+                <div class="card metric-card metric-card-interactive" id="stat-card-total" onclick="focusAuditLogSection()" title="Click to view and filter Audit Events">
+                    <div class="metric-card-header">
+                        <div class="metric-value text-slate" id="stat-total">0</div>
+                        <span class="interactive-indicator">⚡ Explore Logs</span>
+                    </div>
+                    <div class="metric-label">Total Audit Events</div>
+                    <div class="metric-hint">Click to filter by Requester, Approver, or Project</div>
+                </div>
+            </section>
+
+            <!-- Active & Pending Grants Section -->
+            <section class="card content-section">
+                <div class="section-header">
+                    <h2>📋 Elevation Requests & Live Status</h2>
+                    <button class="btn btn-outline" onclick="loadRequests()">↻ Refresh</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Requester</th>
+                                <th>Target Project ID</th>
+                                <th>Scope / Role</th>
+                                <th>Approver</th>
+                                <th>Justification</th>
+                                <th>Status</th>
+                                <th>Remaining Time</th>
+                                <th>Actions & Verification</th>
+                            </tr>
+                        </thead>
+                        <tbody id="requests-table-body">
+                            <tr>
+                                <td colspan="9" class="text-center py-4 text-muted">Loading requests...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Comprehensive Filterable Audit Log Section -->
+            <section class="card content-section" id="audit-section">
+                <div class="section-header">
+                    <div class="section-title-group">
+                        <h2>🔍 Audit Trail & Security Event Logs</h2>
+                        <span class="audit-pulse">● Live Stream Active</span>
+                    </div>
+                    <div class="view-controls">
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline active" id="btn-view-table" onclick="switchAuditView('table')">📊 Table View</button>
+                            <button class="btn btn-sm btn-outline" id="btn-view-stream" onclick="switchAuditView('stream')">📜 Raw Stream</button>
+                        </div>
+                        <button class="btn btn-sm btn-outline" onclick="loadAuditLogs()">↻ Refresh</button>
+                    </div>
+                </div>
+
+                <!-- Audit Log Filter Bar -->
+                <div class="audit-filter-panel">
+                    <div class="filter-grid">
+                        <!-- Requester Filter -->
+                        <div class="filter-item">
+                            <label for="filter-requester">Filter Requester</label>
+                            <div class="input-with-select">
+                                <input type="text" id="filter-requester" class="form-control form-control-sm" placeholder="e.g. admin@..." oninput="applyAuditFilters()">
+                                <select id="select-requester" class="form-control form-control-sm" onchange="onSelectFilterChange('requester', this.value)">
+                                    <option value="">All Requesters</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Approver Filter -->
+                        <div class="filter-item">
+                            <label for="filter-approver">Filter Approver</label>
+                            <div class="input-with-select">
+                                <input type="text" id="filter-approver" class="form-control form-control-sm" placeholder="e.g. scc.admin@..." oninput="applyAuditFilters()">
+                                <select id="select-approver" class="form-control form-control-sm" onchange="onSelectFilterChange('approver', this.value)">
+                                    <option value="">All Approvers</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Project Filter -->
+                        <div class="filter-item">
+                            <label for="filter-project">Filter Target Project</label>
+                            <div class="input-with-select">
+                                <input type="text" id="filter-project" class="form-control form-control-sm" placeholder="e.g. policy-elevator" oninput="applyAuditFilters()">
+                                <select id="select-project" class="form-control form-control-sm" onchange="onSelectFilterChange('project', this.value)">
+                                    <option value="">All Projects</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Event Type Filter -->
+                        <div class="filter-item">
+                            <label for="filter-event-type">Event Type</label>
+                            <select id="filter-event-type" class="form-control form-control-sm" onchange="applyAuditFilters()">
+                                <option value="ALL">All Event Types</option>
+                                <option value="REQUEST_CREATED">REQUEST_CREATED</option>
+                                <option value="GRANT_ACTIVE">GRANT_ACTIVE (Approved)</option>
+                                <option value="GRANT_MANUALLY_REVOKED">GRANT_MANUALLY_REVOKED</option>
+                                <option value="GRANT_EXPIRED_REVOKED">GRANT_EXPIRED_REVOKED</option>
+                                <option value="VERIFICATION_COMPLETED">VERIFICATION_COMPLETED</option>
+                                <option value="REQUEST_REJECTED">REQUEST_REJECTED</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Filter Actions & Stats -->
+                    <div class="filter-footer">
+                        <div class="filter-stats">
+                            <span>Showing <strong id="audit-filter-count">0</strong> of <strong id="audit-total-count">0</strong> audit events</span>
+                            <div class="active-filter-chips" id="active-filter-chips"></div>
+                        </div>
+                        <button class="btn btn-secondary btn-sm" onclick="clearAuditFilters()">✕ Reset Filters</button>
+                    </div>
+                </div>
+
+                <!-- Structured Table View -->
+                <div class="table-responsive" id="audit-table-container">
+                    <table class="data-table audit-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp (UTC)</th>
+                                <th>Event Type</th>
+                                <th>Request ID</th>
+                                <th>Requester</th>
+                                <th>Approver</th>
+                                <th>Target Project</th>
+                                <th>Actor / Trigger</th>
+                                <th>Details & Context</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-table-body">
+                            <tr>
+                                <td colspan="8" class="text-center py-4 text-muted">Loading audit events...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Raw Log Stream Container (Hidden by default, toggleable) -->
+                <div class="audit-log-container" id="audit-log-container" style="display: none;">
+                    <div class="log-entry log-info">[System Init] Audit Manager listening for Cloud Logging events...</div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+
+    <!-- Create Request Modal Dialog -->
+    <div class="modal-backdrop" id="request-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Request JIT Org Policy Permission Elevation</h3>
+                <button class="modal-close" onclick="closeRequestModal()">&times;</button>
+            </div>
+            <form id="create-request-form" onsubmit="handleCreateRequest(event)">
+                <div class="modal-body">
+                    <div class="alert alert-info">
+                        <strong>🔒 Least Privilege Scoping:</strong> Elevation grants <code>roles/orgpolicy.policyAdmin</code> <u>strictly</u> at the <strong>Target Project IAM Policy level</strong>. It cannot affect Organization or sibling project policies.
+                    </div>
+
+                    <div class="form-group">
+                        <label for="input-requester">Requester Identity <span class="required">*</span></label>
+                        <input type="email" id="input-requester" class="form-control" value="{{ user_email }}" oninput="checkFormEligibility()" required>
+                        <div id="requester-eligibility-feedback" class="eligibility-feedback"></div>
+                        <div class="quick-presets">
+                            <span class="preset-label">Quick select:</span>
+                            <button type="button" class="preset-chip" onclick="setRequesterEmail('admin@rwintrob.altostrat.com', this)">admin@rwintrob.altostrat.com</button>
+                            <button type="button" class="preset-chip" onclick="setRequesterEmail('scc.admin@rwintrob.altostrat.com', this)">scc.admin@rwintrob.altostrat.com</button>
+                            <button type="button" class="preset-chip" onclick="setRequesterEmail('rwintrob@rwintrob.altostrat.com', this)">rwintrob@rwintrob.altostrat.com</button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="input-target-project">Target GCP Project ID <span class="required">*</span></label>
+                        <input type="text" id="input-target-project" class="form-control" placeholder="e.g. policy-elevator" value="policy-elevator" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="input-role">Requested IAM Role <span class="required">*</span></label>
+                        <select id="input-role" class="form-control" onchange="updateRoleDescriptionPreview()">
+                            <option value="roles/orgpolicy.policyAdmin" selected>Organization Policy Administrator (roles/orgpolicy.policyAdmin)</option>
+                            <option value="roles/resourcemanager.projectIamAdmin">Project IAM Admin (roles/resourcemanager.projectIamAdmin)</option>
+                            <option value="roles/compute.admin">Compute Engine Admin (roles/compute.admin)</option>
+                            <option value="roles/storage.admin">Storage Admin (roles/storage.admin)</option>
+                            <option value="roles/secretmanager.admin">Secret Manager Admin (roles/secretmanager.admin)</option>
+                            <option value="roles/cloudksm.admin">Cloud KMS Admin (roles/cloudksm.admin)</option>
+                            <option value="roles/pubsub.admin">Pub/Sub Admin (roles/pubsub.admin)</option>
+                            <option value="roles/container.admin">Kubernetes Engine Admin (roles/container.admin)</option>
+                            <option value="roles/editor">Editor (roles/editor)</option>
+                            <option value="roles/viewer">Viewer (roles/viewer)</option>
+                        </select>
+                        <small class="form-text text-muted" id="role-description-preview" style="display: block; margin-top: 0.25rem;">Full access to manage organization policies on the target project.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="input-duration">Grant Duration</label>
+                        <select id="input-duration" class="form-control">
+                            <option value="15">15 Minutes</option>
+                            <option value="30">30 Minutes</option>
+                            <option value="60">1 Hour</option>
+                            <option value="120">2 Hours (Max)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="input-approver">Designated Approver Email <span class="required">*</span></label>
+                        <input type="email" id="input-approver" class="form-control" placeholder="admin@rwintrob.altostrat.com" value="admin@rwintrob.altostrat.com" oninput="checkFormEligibility()" required>
+                        <div id="approver-eligibility-feedback" class="eligibility-feedback"></div>
+                        <div class="quick-presets">
+                            <span class="preset-label">Quick select:</span>
+                            <button type="button" class="preset-chip selected" onclick="setApproverEmail('admin@rwintrob.altostrat.com', this)">admin@rwintrob.altostrat.com</button>
+                            <button type="button" class="preset-chip" onclick="setApproverEmail('scc.admin@rwintrob.altostrat.com', this)">scc.admin@rwintrob.altostrat.com</button>
+                            <button type="button" class="preset-chip" onclick="setApproverEmail('rwintrob@rwintrob.altostrat.com', this)">rwintrob@rwintrob.altostrat.com</button>
+                        </div>
+                        <small class="form-text">Must be a different identity than requester (Separation of Duties).</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="input-justification">Business Justification <span class="required">*</span></label>
+                        <textarea id="input-justification" class="form-control" rows="3" placeholder="Provide detailed ticket reference or business justification for Org Policy override..." required minlength="10"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" onclick="closeRequestModal()">Cancel</button>
+                    <button type="submit" id="btn-submit-request" class="btn btn-primary">Submit Request</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Verification Detail Modal -->
+    <div class="modal-backdrop" id="verify-modal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Permission Removal Verification Proof</h3>
+                <button class="modal-close" onclick="closeVerifyModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="verify-modal-body">
+                <div class="text-center py-4">Checking IAM Policy...</div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" onclick="closeVerifyModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function setRequesterEmail(email, btn) {
+            var input = document.getElementById("input-requester");
+            if (input) {
+                input.value = email;
+            }
+            if (btn && btn.parentElement) {
+                btn.parentElement.querySelectorAll('.preset-chip').forEach(function(c) {
+                    c.classList.remove('selected');
+                });
+                btn.classList.add('selected');
+            }
+        }
+
+        function setApproverEmail(email, btn) {
+            var input = document.getElementById("input-approver");
+            if (input) {
+                input.value = email;
+            }
+            if (btn && btn.parentElement) {
+                btn.parentElement.querySelectorAll('.preset-chip').forEach(function(c) {
+                    c.classList.remove('selected');
+                });
+                btn.classList.add('selected');
+            }
+        }
+    </script>
+    <script src="/static/js/app.js?v={{ v }}"></script>
+</body>
+</html>
