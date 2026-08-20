@@ -878,6 +878,8 @@ async function handleCreateRequest(event) {
     const duration = parseInt(document.getElementById("input-duration").value);
     const approver = document.getElementById("input-approver").value.trim();
     const justification = document.getElementById("input-justification").value.trim();
+    const notifyCheckbox = document.getElementById("input-notify-approver");
+    const notifyApprover = notifyCheckbox ? notifyCheckbox.checked : true;
 
     if (requester.toLowerCase() === approver.toLowerCase()) {
         alert("Separation of Duties Policy: Requester cannot be their own designated approver.");
@@ -897,7 +899,8 @@ async function handleCreateRequest(event) {
                 role: role,
                 duration_minutes: duration,
                 approver_email: approver,
-                justification: justification
+                justification: justification,
+                notify_approver_email: notifyApprover
             })
         });
 

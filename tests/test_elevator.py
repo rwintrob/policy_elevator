@@ -345,4 +345,49 @@ def test_watchdog_status_endpoint():
     assert "idle_quiet_threshold_seconds" in data
     assert "monitored_grants_count" in data
 
+def test_notify_approver_email_checkbox_option():
+    """Verify notify_approver_email checkbox creates request, triggers notification, and logs event."""
+    # 1. Test with notify_approver_email = True
+    payload_notify = {
+        "requester_email": "requester.notify@rwintrob.altostrat.com",
+        "target_project_id": "prj-notify-01",
+        "role": "roles/orgpolicy.policyAdmin",
+        "justification": "Testing email notification option enabled",
+        "duration_minutes": 15,
+        "approver_email": "approver.notify@rwintrob.altostrat.com",
+        "notify_approver_email": True
+    }
+    resp = client.post("/api/requests", json=payload_notify)
+    assert resp.status_code == 200
+    req_data = resp.json()
+    assert req_data["notify_approver_email"] is True
+    req_id = req_data["request_id"]
+
+    # Verify audit log recorded notification dispatch
+    audit_resp = client.get(f"/api/audit?request_id={req_id}")
+    assert audit_resp.status_code == 200
+    logs = audit_resp.json()
+    assert any(l["event_type"] == "APPROVER_NOTIFICATION_SENT" for l in logs)
+
+    # 2. Test with notify_approver_email = False
+    payload_no_notify = {
+        "requester_email": "requester.notify@rwintrob.altostrat.com",
+        "target_project_id": "prj-notify-02",
+        "role": "roles/orgpolicy.policyAdmin",
+        "justification": "Testing email notification option disabled",
+        "duration_minutes": 15,
+        "approver_email": "approver.notify@rwintrob.altostrat.com",
+        "notify_approver_email": False
+    }
+    resp_off = client.post("/api/requests", json=payload_no_notify)
+    assert resp_off.status_code == 200
+    req_off_data = resp_off.json()
+    assert req_off_data["notify_approver_email"] is False
+    req_off_id = req_off_data["request_id"]
+
+    audit_off_resp = client.get(f"/api/audit?request_id={req_off_id}")
+    logs_off = audit_off_resp.json()
+    assert not any(l["event_type"] == "APPROVER_NOTIFICATION_SENT" for l in logs_off)
+
+
 

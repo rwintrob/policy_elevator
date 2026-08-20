@@ -25,6 +25,7 @@ from models import (
 from iam_manager import IAMManager
 from audit import AuditManager
 from watchdog import WatchdogAgent
+from notifier import send_approver_notification
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -255,6 +256,7 @@ async def create_elevation_request(req_data: ElevationRequestCreate, request: Re
         justification=req_data.justification.strip(),
         duration_minutes=req_data.duration_minutes,
         approver_email=approver,
+        notify_approver_email=req_data.notify_approver_email,
         status=ElevationStatus.PENDING,
         created_at=datetime.now(timezone.utc)
     )
@@ -268,8 +270,23 @@ async def create_elevation_request(req_data: ElevationRequestCreate, request: Re
         role=new_req.role,
         requester_email=new_req.requester_email,
         approver_email=new_req.approver_email,
-        payload={"justification": new_req.justification, "duration_minutes": new_req.duration_minutes, "approver_email": new_req.approver_email, "role": new_req.role}
+        payload={"justification": new_req.justification, "duration_minutes": new_req.duration_minutes, "approver_email": new_req.approver_email, "role": new_req.role, "notify_approver_email": new_req.notify_approver_email}
     )
+
+    # Dispatch email notification if requested
+    if new_req.notify_approver_email:
+        sent = send_approver_notification(new_req)
+        if sent:
+            audit_mgr.log_event(
+                event_type="APPROVER_NOTIFICATION_SENT",
+                request_id=new_req.request_id,
+                actor_email="system:notifier",
+                target_project_id=new_req.target_project_id,
+                role=new_req.role,
+                requester_email=new_req.requester_email,
+                approver_email=new_req.approver_email,
+                payload={"recipient": new_req.approver_email, "status": "DISPATCHED"}
+            )
 
     return new_req
 

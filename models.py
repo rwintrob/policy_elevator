@@ -40,6 +40,7 @@ class ElevationRequestCreate(BaseModel):
     justification: str = Field(..., min_length=10, description="Mandatory business justification for elevation")
     duration_minutes: int = Field(15, ge=1, le=120, description="Duration in minutes for JIT grant (1 to 120)")
     approver_email: str = Field(..., description="Email identity of the designated approver")
+    notify_approver_email: bool = Field(default=True, description="Whether to send an email notification to designated approver")
 
 class ApprovalAction(BaseModel):
     approver_email: str = Field(..., description="Email identity of the approving party")
@@ -84,6 +85,7 @@ class ElevationRequest(BaseModel):
     justification: str = Field(..., description="Business justification")
     duration_minutes: int = Field(..., description="Elevation duration in minutes")
     approver_email: str = Field(..., description="Designated approver email")
+    notify_approver_email: bool = Field(default=True, description="Whether notification email was requested")
     status: ElevationStatus = Field(default=ElevationStatus.PENDING, description="Current operational status")
     created_at: datetime = Field(default_factory=utc_now, description="Creation timestamp")
     approved_at: Optional[datetime] = Field(None, description="Approval timestamp")

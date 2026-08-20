@@ -281,6 +281,13 @@
                         <label for="input-justification">Business Justification <span class="required">*</span></label>
                         <textarea id="input-justification" class="form-control" rows="3" placeholder="Provide detailed ticket reference or business justification for Org Policy override..." required minlength="10"></textarea>
                     </div>
+
+                    <div class="form-group" style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; padding: 0.5rem 0.75rem; background: rgba(255, 255, 255, 0.03); border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.08);">
+                        <input type="checkbox" id="input-notify-approver" checked style="width: 1.1rem; height: 1.1rem; cursor: pointer;">
+                        <label for="input-notify-approver" style="margin-bottom: 0; cursor: pointer; font-weight: 500; font-size: 0.9rem;">
+                            📧 Send email notification to designated approver
+                        </label>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" onclick="closeRequestModal()">Cancel</button>
