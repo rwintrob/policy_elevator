@@ -19,7 +19,35 @@ An automated Just-In-Time (JIT) IAM Elevation Service for Google Cloud Platform 
 - `POST /api/requests/{id}/approve` - Approve or reject a request
 - `POST /api/requests/{id}/revoke` - Manually revoke an active grant
 - `GET /api/requests/{id}/verify` - Empirically verify permission removal
+- `GET /api/notifications/config` - Inspect email notification backend status
+- `POST /api/notifications/test` - Send a test email to verify SMTP / SendGrid connectivity
 - `GET /api/audit` - Filterable audit log stream
+
+## Email Notification Configuration
+Approver notifications can be dispatched via standard SMTP, SendGrid, Mailgun, or Google Workspace Relay. Copy `.env.example` to `.env` or export environment variables:
+
+### Option A: Standard SMTP / Gmail App Passwords
+```bash
+export SMTP_HOST="smtp.gmail.com"
+export SMTP_PORT=587
+export SMTP_USER="your-email@rwintrob.altostrat.com"
+export SMTP_PASSWORD="your-app-password"
+export SMTP_SENDER="jit-elevator@rwintrob.altostrat.com"
+export SMTP_USE_TLS=true
+```
+
+### Option B: SendGrid Web API
+```bash
+export SENDGRID_API_KEY="SG.your_sendgrid_api_key_here"
+export SMTP_SENDER="jit-elevator@rwintrob.altostrat.com"
+```
+
+### Option C: Google Workspace Unauthenticated Relay (IP Whitelisted)
+```bash
+export SMTP_HOST="smtp-relay.gmail.com"
+export SMTP_PORT=25
+export SMTP_SENDER="jit-elevator@rwintrob.altostrat.com"
+```
 
 ## Quick Start
 ```bash
@@ -29,3 +57,4 @@ pip install -r requirements.txt
 # Run application
 python3 -m uvicorn main:app --host 0.0.0.0 --port 8080 --reload
 ```
+

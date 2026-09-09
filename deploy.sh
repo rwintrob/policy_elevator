@@ -78,6 +78,16 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
     --role="roles/storage.objectAdmin" \
     --condition=None >/dev/null 2>&1 || true
 
+# Build environment variables string
+ENV_VARS="GCP_PROJECT_ID=${PROJECT_ID}:GCP_ORGANIZATION_ID=${GCP_ORGANIZATION_ID:-527512186146}:ALLOWED_DOMAINS=${ALLOWED_DOMAINS:-rwintrob.altostrat.com,altostrat.com}"
+
+if [ -n "${SMTP_HOST:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_HOST=${SMTP_HOST}"; fi
+if [ -n "${SMTP_PORT:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_PORT=${SMTP_PORT}"; fi
+if [ -n "${SMTP_USER:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_USER=${SMTP_USER}"; fi
+if [ -n "${SMTP_PASSWORD:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_PASSWORD=${SMTP_PASSWORD}"; fi
+if [ -n "${SMTP_SENDER:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_SENDER=${SMTP_SENDER}"; fi
+if [ -n "${SENDGRID_API_KEY:-}" ]; then ENV_VARS="${ENV_VARS}:SENDGRID_API_KEY=${SENDGRID_API_KEY}"; fi
+
 # 4. Build and Deploy Container to Cloud Run
 echo "[4/5] Deploying Container to Google Cloud Run..."
 gcloud run deploy "${SERVICE_NAME}" \
@@ -87,7 +97,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --service-account="${SA_EMAIL}" \
     --no-allow-unauthenticated \
     --port=8080 \
-    --set-env-vars="^:^GCP_PROJECT_ID=${PROJECT_ID}:GCP_ORGANIZATION_ID=527512186146:ALLOWED_DOMAINS=${ALLOWED_DOMAINS:-rwintrob.altostrat.com,altostrat.com}" \
+    --set-env-vars="^:^${ENV_VARS}" \
     --platform=managed \
     --quiet
 

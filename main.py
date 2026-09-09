@@ -25,7 +25,11 @@ from models import (
 from iam_manager import IAMManager
 from audit import AuditManager
 from watchdog import WatchdogAgent
-from notifier import send_approver_notification
+from notifier import (
+    get_notification_config,
+    send_approver_notification,
+    send_test_notification
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -491,4 +495,31 @@ async def get_audit_trail(
         project=project,
         event_type=event_type
     )
+
+@app.get("/api/notifications/config")
+async def get_email_notification_config():
+    """Returns current notification provider configuration status (safe metadata)."""
+    return get_notification_config()
+
+@app.post("/api/notifications/test")
+async def trigger_test_email(payload: dict, request: Request):
+    """Sends a test email to verify SMTP or SendGrid connectivity."""
+    user_email = get_current_user_identity(request)
+    recipient = (payload.get("recipient_email") or user_email).strip()
+    
+    eligibility = validate_identity_eligibility(recipient)
+    if not eligibility.domain_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Test email recipient domain '@{eligibility.domain}' is not an authorized organization domain."
+        )
+
+    success, status_code, details = send_test_notification(recipient)
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to deliver test email: {details.get('error', status_code)}"
+        )
+    return {"success": True, "status": status_code, "recipient": recipient, "details": details}
+
 

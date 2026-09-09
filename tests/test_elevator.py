@@ -389,5 +389,31 @@ def test_notify_approver_email_checkbox_option():
     logs_off = audit_off_resp.json()
     assert not any(l["event_type"] == "APPROVER_NOTIFICATION_SENT" for l in logs_off)
 
+def test_notification_config_endpoint():
+    """Verify notification configuration metadata endpoint."""
+    resp = client.get("/api/notifications/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "provider" in data
+    assert "configured" in data
+    assert "sender_email" in data
+    assert "use_tls" in data
+
+def test_notification_test_email_endpoint():
+    """Verify triggering test email endpoint with valid domain recipient."""
+    resp = client.post("/api/notifications/test", json={"recipient_email": "admin@rwintrob.altostrat.com"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert "status" in data
+    assert data["recipient"] == "admin@rwintrob.altostrat.com"
+
+def test_notification_test_email_ineligible_domain_rejected():
+    """Verify triggering test email to unauthorized external domain is rejected."""
+    resp = client.post("/api/notifications/test", json={"recipient_email": "intruder@malicious.org"})
+    assert resp.status_code == 400
+    assert "not an authorized organization domain" in resp.json()["detail"]
+
+
 
 
