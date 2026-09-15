@@ -1,3 +1,5 @@
+Disclaimer: This package, and its associated code are provided as-is for educational and architectural demonstration purposes. This is not an official Google product, nor is it supported by Google Cloud Customer Support or Google engineering teams. Use in production environments at your own discretion and risk.
+
 # JIT Policy Elevator
 
 An automated Just-In-Time (JIT) IAM Elevation Service for Google Cloud Platform (GCP).
