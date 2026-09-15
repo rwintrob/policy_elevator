@@ -255,7 +255,7 @@ This document outlines the phased engineering remediation plan for all **9 secur
 
 ## ✅ Remediation Sign-Off Checklist
 
-- [ ] **Phase 1 (`FINDING-01`, `FINDING-02`)**: Caller verification enforced on `/approve`; strict regex validation enforced on `target_project_id`.
-- [ ] **Phase 2 (`FINDING-03` – `FINDING-06`)**: Email canonicalization active; inline `onclick` handlers removed; custom IAM role scripted; HTML escaping applied to email templates.
-- [ ] **Phase 3 (`FINDING-07` – `FINDING-09`)**: Watchdog `mock_mode` disabled by default; revocation verification checks unconditioned bindings; secrets migrated to Secret Manager.
-- [ ] **Regression Suite**: All functional tests (`TEST_PLAN.md`) and security regression tests pass (`pytest`).
+- [x] **Phase 1 (`FINDING-01`, `FINDING-02`)**: Caller verification enforced on `/approve`; strict regex validation enforced on `target_project_id`.
+- [x] **Phase 2 (`FINDING-03` – `FINDING-06`)**: Email canonicalization active; inline `onclick` handlers removed; custom IAM role scripted; HTML escaping applied to email templates.
+- [x] **Phase 3 (`FINDING-07` – `FINDING-09`)**: Watchdog `mock_mode` disabled by default; revocation verification checks unconditioned bindings; secrets migrated to Secret Manager.
+- [x] **Regression Suite**: All functional tests (`TEST_PLAN.md`) and security regression tests pass (`pytest` — 41/41 passing).

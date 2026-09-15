@@ -1,3 +1,4 @@
+import os
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
@@ -57,9 +58,16 @@ class WatchdogAgent:
     Tracks elevated operations performed by the requester and automatically
     triggers early rollback and permission revocation once the operation is completed.
     """
-    def __init__(self, idle_quiet_seconds: int = 15, mock_mode: bool = True):
-        self.idle_quiet_seconds = idle_quiet_seconds
-        self.mock_mode = mock_mode
+    def __init__(self, idle_quiet_seconds: Optional[int] = None, mock_mode: Optional[bool] = None):
+        if idle_quiet_seconds is not None:
+            self.idle_quiet_seconds = idle_quiet_seconds
+        else:
+            self.idle_quiet_seconds = int(os.environ.get("WATCHDOG_QUIET_SECONDS", "180"))
+
+        if mock_mode is not None:
+            self.mock_mode = mock_mode
+        else:
+            self.mock_mode = os.environ.get("ENABLE_MOCK_WATCHDOG", "false").lower() in ("true", "1", "yes")
         self._summaries: Dict[str, WatchdogSummary] = {}
 
     def start_monitoring(self, request: ElevationRequest) -> WatchdogSummary:

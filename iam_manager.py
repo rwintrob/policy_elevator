@@ -1,8 +1,9 @@
 import os
+import re
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
-from models import VerificationResult
+from models import VerificationResult, GCP_PROJECT_ID_REGEX
 
 logger = logging.getLogger("jit_policy_elevator")
 
@@ -18,7 +19,7 @@ class IAMManager:
 
     def __init__(self, mock_mode: bool = False, default_org_id: Optional[str] = None):
         self.mock_mode = mock_mode
-        self.default_org_id = default_org_id or os.environ.get("GCP_ORGANIZATION_ID", "527512186146")
+        self.default_org_id = default_org_id or os.environ.get("GCP_ORGANIZATION_ID")
         self._resourcemanager = None
         self._mock_org_policies: Dict[str, dict] = {}
 
@@ -51,28 +52,32 @@ class IAMManager:
                     return parent.get("id")
             except Exception as e:
                 logger.warning(f"Could not fetch parent organization for project {target_project_id}: {e}")
-        return "527512186146"
+        return os.environ.get("GCP_ORGANIZATION_ID", "mock-org-000000")
 
     def grant_project_role(self, target_project_id: str, member: str, role: str = TARGET_ROLE) -> Tuple[bool, str, Optional[str]]:
         """
         Binds the specified role with an IAM Condition restricting the scope strictly to target_project_id.
         Returns: (success: bool, message: str, policy_etag: Optional[str])
         """
+        clean_project_id = (target_project_id or "").strip()
+        if not GCP_PROJECT_ID_REGEX.match(clean_project_id):
+            raise ValueError(f"Invalid GCP Project ID '{target_project_id}'. CEL condition synthesis aborted.")
+
         target_role = role or TARGET_ROLE
         normalized_member = self._normalize_member(member)
         role_slug = target_role.split("/")[-1]
-        cond_title = f"JIT-Project-{target_project_id}-{role_slug}"
-        cond_expr = f'resource.name.startsWith("projects/{target_project_id}")'
-        logger.info(f"Initiating JIT IAM grant: Binding {target_role} for {normalized_member} scoped strictly to project {target_project_id}")
+        cond_title = f"JIT-Project-{clean_project_id}-{role_slug}"
+        cond_expr = f'resource.name.startsWith("projects/{clean_project_id}")'
+        logger.info(f"Initiating JIT IAM grant: Binding {target_role} for {normalized_member} scoped strictly to project {clean_project_id}")
 
         if self.mock_mode:
-            org_id = self._get_org_id(target_project_id)
+            org_id = self._get_org_id(clean_project_id)
             policy = self._mock_org_policies.setdefault(org_id, {"version": 3, "etag": "mock-etag-01", "bindings": []})
             bindings = policy.setdefault("bindings", [])
             
             target_binding = None
             for b in bindings:
-                if b.get("role") == target_role and (b.get("condition", {}).get("title") == cond_title or b.get("condition", {}).get("title") == f"JIT-Project-{target_project_id}"):
+                if b.get("role") == target_role and (b.get("condition", {}).get("title") == cond_title or b.get("condition", {}).get("title") == f"JIT-Project-{clean_project_id}"):
                     target_binding = b
                     break
             
@@ -215,9 +220,38 @@ class IAMManager:
         """Backwards compatible alias for revoke_project_role."""
         return self.revoke_project_role(target_project_id, member, role)
 
+    def _binding_grants_access_to_project(
+        self,
+        binding: dict,
+        target_role: str,
+        normalized_member: str,
+        target_project_id: str,
+        cond_title: str
+    ) -> bool:
+        """
+        Checks whether a binding grants target_role to normalized_member on target_project_id,
+        accounting for both unconditioned (global org-wide) bindings and conditional bindings.
+        """
+        if binding.get("role") != target_role:
+            return False
+        if normalized_member not in binding.get("members", []):
+            return False
+        condition = binding.get("condition")
+        if not condition:
+            # Unconditioned binding grants global access across all projects in the organization
+            return True
+        title = condition.get("title", "")
+        expr = condition.get("expression", "")
+        if title == cond_title or title == f"JIT-Project-{target_project_id}":
+            return True
+        if f"projects/{target_project_id}" in expr:
+            return True
+        return False
+
     def verify_permission_removed(self, target_project_id: str, member: str, role: str = TARGET_ROLE) -> VerificationResult:
         """
-        Empirically verifies that specified role is completely absent for member on target_project_id.
+        Empirically verifies that specified role is completely absent for member on target_project_id,
+        checking both project-scoped conditional bindings and unconditioned organization-wide bindings.
         Returns: VerificationResult
         """
         target_role = role or TARGET_ROLE
@@ -232,10 +266,9 @@ class IAMManager:
             bindings = policy.get("bindings", [])
             is_present = False
             for b in bindings:
-                if b.get("role") == target_role and (b.get("condition", {}).get("title") == cond_title or b.get("condition", {}).get("title") == f"JIT-Project-{target_project_id}"):
-                    if normalized_member in b.get("members", []):
-                        is_present = True
-                        break
+                if self._binding_grants_access_to_project(b, target_role, normalized_member, target_project_id, cond_title):
+                    is_present = True
+                    break
 
             now_utc = datetime.now(timezone.utc)
             if not is_present:
@@ -250,7 +283,7 @@ class IAMManager:
                     verified_removed=False,
                     timestamp=now_utc,
                     policy_etag=policy.get("etag"),
-                    details=f"VERIFICATION FAILURE: {normalized_member} still possesses {target_role} binding for project {target_project_id}!"
+                    details=f"VERIFICATION FAILURE: {normalized_member} still possesses {target_role} binding (conditioned or unconditioned) for project {target_project_id}!"
                 )
 
         try:
@@ -265,10 +298,9 @@ class IAMManager:
             bindings = policy.get("bindings", [])
             is_present = False
             for b in bindings:
-                if b.get("role") == target_role and (b.get("condition", {}).get("title") == cond_title or b.get("condition", {}).get("title") == f"JIT-Project-{target_project_id}"):
-                    if normalized_member in b.get("members", []):
-                        is_present = True
-                        break
+                if self._binding_grants_access_to_project(b, target_role, normalized_member, target_project_id, cond_title):
+                    is_present = True
+                    break
 
             etag = policy.get("etag", "")
             now_utc = datetime.now(timezone.utc)

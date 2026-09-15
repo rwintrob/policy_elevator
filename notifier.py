@@ -1,4 +1,5 @@
 import os
+import html
 import logging
 import smtplib
 from pathlib import Path
@@ -208,41 +209,39 @@ def dispatch_email(
         "note": "To enable real email delivery, configure SMTP_HOST or SENDGRID_API_KEY in environment or .env file."
     }
 
-def send_approver_notification(request: ElevationRequest) -> bool:
-    """
-    Dispatches an email notification to the designated approver when a JIT elevation request is submitted.
-    """
-    if not request.notify_approver_email:
-        logger.info(f"Notification skipped for request #{request.request_id} (notify_approver_email is False).")
-        return False
+def build_approver_notification_html(request: ElevationRequest) -> str:
+    """Builds safely HTML-escaped notification body for designated approvers (FINDING-06)."""
+    safe_approver = html.escape(request.approver_email or "", quote=True)
+    safe_req_id = html.escape(request.request_id or "", quote=True)
+    safe_requester = html.escape(request.requester_email or "", quote=True)
+    safe_project = html.escape(request.target_project_id or "", quote=True)
+    safe_role = html.escape(request.role or "", quote=True)
+    safe_justification = html.escape(request.justification or "", quote=True)
 
-    approver = request.approver_email
-    subject = f"[JIT Elevation Pending] Request #{request.request_id} for Project {request.target_project_id}"
-
-    body_html = f"""
+    return f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
           <h2 style="color: #2563eb; margin-top: 0;">🛡️ JIT Elevation Request Pending Approval</h2>
-          <p>Hello <strong>{approver}</strong>,</p>
+          <p>Hello <strong>{safe_approver}</strong>,</p>
           <p>You have been designated as the approver for a Just-In-Time (JIT) IAM permission elevation request on Google Cloud Platform.</p>
           
           <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
             <tr style="background-color: #f8fafc;">
               <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold;">Request ID:</td>
-              <td style="padding: 10px; border: 1px solid #e2e8f0;"><code>#{request.request_id}</code></td>
+              <td style="padding: 10px; border: 1px solid #e2e8f0;"><code>#{safe_req_id}</code></td>
             </tr>
             <tr>
               <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold;">Requester:</td>
-              <td style="padding: 10px; border: 1px solid #e2e8f0;">{request.requester_email}</td>
+              <td style="padding: 10px; border: 1px solid #e2e8f0;">{safe_requester}</td>
             </tr>
             <tr style="background-color: #f8fafc;">
               <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold;">Target Project ID:</td>
-              <td style="padding: 10px; border: 1px solid #e2e8f0;"><strong>{request.target_project_id}</strong></td>
+              <td style="padding: 10px; border: 1px solid #e2e8f0;"><strong>{safe_project}</strong></td>
             </tr>
             <tr>
               <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold;">Requested Role:</td>
-              <td style="padding: 10px; border: 1px solid #e2e8f0;"><code>{request.role}</code></td>
+              <td style="padding: 10px; border: 1px solid #e2e8f0;"><code>{safe_role}</code></td>
             </tr>
             <tr style="background-color: #f8fafc;">
               <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold;">Duration:</td>
@@ -250,7 +249,7 @@ def send_approver_notification(request: ElevationRequest) -> bool:
             </tr>
             <tr>
               <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold;">Justification:</td>
-              <td style="padding: 10px; border: 1px solid #e2e8f0;"><em>"{request.justification}"</em></td>
+              <td style="padding: 10px; border: 1px solid #e2e8f0;"><em>"{safe_justification}"</em></td>
             </tr>
           </table>
 
@@ -261,6 +260,18 @@ def send_approver_notification(request: ElevationRequest) -> bool:
       </body>
     </html>
     """
+
+def send_approver_notification(request: ElevationRequest) -> bool:
+    """
+    Dispatches an email notification to the designated approver when a JIT elevation request is submitted.
+    """
+    if not request.notify_approver_email:
+        logger.info(f"Notification skipped for request #{request.request_id} (notify_approver_email is False).")
+        return False
+
+    approver = request.approver_email
+    subject = f"[JIT Elevation Pending] Request #{request.request_id} for Project {request.target_project_id}"
+    body_html = build_approver_notification_html(request)
 
     body_text = f"""JIT Elevation Request Pending Approval
 

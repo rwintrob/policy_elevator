@@ -417,18 +417,18 @@ function renderRequestsTable(requests) {
             <tr>
                 <td><code>#${req.request_id}</code></td>
                 <td>
-                    <span class="clickable-link" onclick="filterByRequester('${escapeHtml(req.requester_email)}')" title="Click to filter audit logs by requester">
+                    <span class="clickable-link" data-filter-type="requester" data-filter-value="${escapeHtml(req.requester_email)}" title="Click to filter audit logs by requester">
                         ${escapeHtml(req.requester_email)}
                     </span>
                 </td>
                 <td>
-                    <span class="clickable-link" onclick="filterByProject('${escapeHtml(req.target_project_id)}')" title="Click to filter audit logs by project">
+                    <span class="clickable-link" data-filter-type="project" data-filter-value="${escapeHtml(req.target_project_id)}" title="Click to filter audit logs by project">
                         <strong>${escapeHtml(req.target_project_id)}</strong>
                     </span>
                 </td>
                 <td><code>${escapeHtml(req.role || 'roles/orgpolicy.policyAdmin')}</code></td>
                 <td>
-                    <span class="clickable-link" onclick="filterByApprover('${escapeHtml(req.approver_email)}')" title="Click to filter audit logs by approver">
+                    <span class="clickable-link" data-filter-type="approver" data-filter-value="${escapeHtml(req.approver_email)}" title="Click to filter audit logs by approver">
                         ${escapeHtml(req.approver_email)}
                     </span>
                 </td>
@@ -447,6 +447,7 @@ function renderRequestsTable(requests) {
     });
 
     tbody.innerHTML = html;
+    attachFilterClickListeners(tbody);
     updateCountdownTimers();
 }
 
@@ -767,22 +768,22 @@ function renderFilteredAuditLogs(filteredLogs) {
                         <td class="whitespace-nowrap"><small class="text-muted">${formattedTime}</small></td>
                         <td>${eventBadge}</td>
                         <td>
-                            <span class="clickable-link" onclick="filterByRequestId('${escapeHtml(log.request_id)}')" title="Filter events for request #${escapeHtml(log.request_id)}">
+                            <span class="clickable-link" data-filter-type="requestId" data-filter-value="${escapeHtml(log.request_id)}" title="Filter events for request #${escapeHtml(log.request_id)}">
                                 <code>#${escapeHtml(log.request_id)}</code>
                             </span>
                         </td>
                         <td>
-                            <span class="clickable-link" onclick="filterByRequester('${escapeHtml(requester)}')" title="Filter by requester">
+                            <span class="clickable-link" data-filter-type="requester" data-filter-value="${escapeHtml(requester)}" title="Filter by requester">
                                 ${escapeHtml(requester)}
                             </span>
                         </td>
                         <td>
-                            <span class="clickable-link" onclick="filterByApprover('${escapeHtml(approver)}')" title="Filter by approver">
+                            <span class="clickable-link" data-filter-type="approver" data-filter-value="${escapeHtml(approver)}" title="Filter by approver">
                                 ${escapeHtml(approver)}
                             </span>
                         </td>
                         <td>
-                            <span class="clickable-link" onclick="filterByProject('${escapeHtml(log.target_project_id)}')" title="Filter by project">
+                            <span class="clickable-link" data-filter-type="project" data-filter-value="${escapeHtml(log.target_project_id)}" title="Filter by project">
                                 <strong>${escapeHtml(log.target_project_id)}</strong>
                             </span>
                         </td>
@@ -800,6 +801,7 @@ function renderFilteredAuditLogs(filteredLogs) {
                 `;
             });
             tbody.innerHTML = tableHtml;
+            attachFilterClickListeners(tbody);
         }
     }
 
@@ -812,11 +814,25 @@ function renderFilteredAuditLogs(filteredLogs) {
             let streamHtml = "";
             filteredLogs.forEach(log => {
                 const ts = new Date(log.timestamp).toLocaleTimeString();
-                streamHtml += `<div class="log-entry">[${ts}] <strong>${log.event_type}</strong> | Requester: ${log.requester_email || 'N/A'} | Approver: ${log.approver_email || 'N/A'} | Project: ${log.target_project_id} | Actor: ${log.actor_email} | ${JSON.stringify(log.payload)}</div>`;
+                streamHtml += `<div class="log-entry">[${ts}] <strong>${escapeHtml(log.event_type)}</strong> | Requester: ${escapeHtml(log.requester_email || 'N/A')} | Approver: ${escapeHtml(log.approver_email || 'N/A')} | Project: ${escapeHtml(log.target_project_id)} | Actor: ${escapeHtml(log.actor_email)} | ${escapeHtml(JSON.stringify(log.payload))}</div>`;
             });
             streamContainer.innerHTML = streamHtml;
         }
     }
+}
+
+function attachFilterClickListeners(container) {
+    if (!container) return;
+    container.querySelectorAll("[data-filter-type]").forEach((el) => {
+        el.addEventListener("click", () => {
+            const filterType = el.dataset.filterType;
+            const filterValue = el.dataset.filterValue || "";
+            if (filterType === "requester") filterByRequester(filterValue);
+            else if (filterType === "project") filterByProject(filterValue);
+            else if (filterType === "approver") filterByApprover(filterValue);
+            else if (filterType === "requestId") filterByRequestId(filterValue);
+        });
+    });
 }
 
 // Get Formatted Event Type Badge

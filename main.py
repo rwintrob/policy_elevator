@@ -124,6 +124,30 @@ def validate_identity_eligibility(email: str, role_type: str = "requester") -> I
         message=f"Identity '{clean_email}' is verified and eligible under authorized organization domain '@{domain}'."
     )
 
+def canonicalize_email(email: str) -> str:
+    """
+    Normalizes email address to prevent +tag subaddressing and dot-aliasing SoD bypasses.
+    Example: 'alice.smith+admin@altostrat.com' -> 'alicesmith@altostrat.com'
+    """
+    clean = (email or "").strip().lower()
+    if "@" not in clean:
+        return clean
+    local, domain = clean.split("@", 1)
+    local = local.split("+", 1)[0]
+    local = local.replace(".", "")
+    return f"{local}@{domain}"
+
+def has_explicit_auth_header(request: Request) -> bool:
+    """Returns True if an explicit IAP or reverse proxy authentication header is present."""
+    if request.headers.get("X-Goog-Authenticated-User-Email"):
+        return True
+    if request.headers.get("X-Forwarded-User"):
+        return True
+    user_header = request.headers.get("X-User-Email")
+    if user_header and user_header != "null" and user_header != "undefined":
+        return True
+    return False
+
 def get_current_user_identity(request: Request) -> str:
     """
     Extracts authenticated user identity from GCP Identity-Aware Proxy (IAP) header,
@@ -245,8 +269,8 @@ async def create_elevation_request(req_data: ElevationRequestCreate, request: Re
             detail=f"Designated Approver Eligibility Denied: {appr_check.message}"
         )
 
-    # 3. Enforce Separation of Duties
-    if requester.lower() == approver.lower():
+    # 3. Enforce Separation of Duties (canonicalized against +tag and dot aliasing)
+    if canonicalize_email(requester) == canonicalize_email(approver):
         raise HTTPException(
             status_code=400,
             detail="Separation of Duties violation: Requester cannot designate themselves as their own approver."
@@ -307,7 +331,7 @@ async def get_elevation_request(request_id: str):
 
 @app.post("/api/requests/{request_id}/approve", response_model=ElevationRequest)
 async def process_approval(request_id: str, action: ApprovalAction, request: Request):
-    user_email = get_current_user_identity(request)
+    user_email = get_current_user_identity(request).strip()
     approver = (action.approver_email or user_email).strip()
 
     # Validate Approver Eligibility
@@ -325,9 +349,24 @@ async def process_approval(request_id: str, action: ApprovalAction, request: Req
     if req.status != ElevationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot approve request in status {req.status}")
 
-    # Enforce separation of duties: Approver cannot be the Requester
-    if approver.lower() == req.requester_email.lower():
+    # Enforce separation of duties: Approver cannot be the Requester (canonicalized)
+    if canonicalize_email(approver) == canonicalize_email(req.requester_email):
         raise HTTPException(status_code=403, detail="Separation of Duties violation: Requester cannot approve their own request.")
+
+    # Enforce Caller Verification & Prevent Approver Spoofing (FINDING-01)
+    if has_explicit_auth_header(request):
+        if canonicalize_email(user_email) != canonicalize_email(approver):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Approver Spoofing Denied: Authenticated caller '{user_email}' cannot spoof or act as '{approver}'."
+            )
+
+    # Verify that approver matches the designated approver on the request
+    if canonicalize_email(approver) != canonicalize_email(req.approver_email):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Unauthorized Approver: Identity '{approver}' is not the designated approver ('{req.approver_email}') for this request."
+        )
 
     if not action.approved:
         req.status = ElevationStatus.REJECTED

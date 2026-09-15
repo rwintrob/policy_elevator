@@ -47,14 +47,25 @@ else
     echo "Service Account ${SA_EMAIL} already exists."
 fi
 
-# 3. Grant Required IAM Permissions to Service Account
-echo "[3/5] Binding IAM permissions to Elevator Service Account..."
+# 3. Grant Required Least-Privilege IAM Permissions to Service Account (FINDING-05)
+echo "[3/5] Provisioning minimal Custom Organization Role & binding least-privilege permissions..."
 
-# Grant Project IAM Admin at Organization or Target Project level so elevator can modify IAM policy
-# Note: For strict security, you can bind roles/resourcemanager.projectIamAdmin per target project
-gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+if [ -z "${GCP_ORGANIZATION_ID:-}" ]; then
+    echo "ERROR: GCP_ORGANIZATION_ID environment variable is required for least-privilege org role setup."
+    exit 1
+fi
+
+CUSTOM_ROLE_ID="jitPolicyElevatorBroker"
+gcloud iam roles create "${CUSTOM_ROLE_ID}" \
+    --organization="${GCP_ORGANIZATION_ID}" \
+    --title="JIT Policy Elevator Broker" \
+    --description="Minimal permissions to read and write conditional IAM bindings for JIT elevation" \
+    --permissions="resourcemanager.organizations.getIamPolicy,resourcemanager.organizations.setIamPolicy,resourcemanager.projects.get" \
+    --stage="GA" >/dev/null 2>&1 || true
+
+gcloud organizations add-iam-policy-binding "${GCP_ORGANIZATION_ID}" \
     --member="serviceAccount:${SA_EMAIL}" \
-    --role="roles/resourcemanager.projectIamAdmin" \
+    --role="organizations/${GCP_ORGANIZATION_ID}/roles/${CUSTOM_ROLE_ID}" \
     --condition=None >/dev/null
 
 # Grant Firestore User for audit logging
@@ -78,15 +89,22 @@ gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
     --role="roles/storage.objectAdmin" \
     --condition=None >/dev/null 2>&1 || true
 
-# Build environment variables string
-ENV_VARS="GCP_PROJECT_ID=${PROJECT_ID}:GCP_ORGANIZATION_ID=${GCP_ORGANIZATION_ID:-527512186146}:ALLOWED_DOMAINS=${ALLOWED_DOMAINS:-rwintrob.altostrat.com,altostrat.com}"
+# Build non-sensitive environment variables string (FINDING-09: no hardcoded org ID or plaintext secrets)
+ENV_VARS="GCP_PROJECT_ID=${PROJECT_ID}:GCP_ORGANIZATION_ID=${GCP_ORGANIZATION_ID}:ALLOWED_DOMAINS=${ALLOWED_DOMAINS:-altostrat.com}"
 
 if [ -n "${SMTP_HOST:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_HOST=${SMTP_HOST}"; fi
 if [ -n "${SMTP_PORT:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_PORT=${SMTP_PORT}"; fi
 if [ -n "${SMTP_USER:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_USER=${SMTP_USER}"; fi
-if [ -n "${SMTP_PASSWORD:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_PASSWORD=${SMTP_PASSWORD}"; fi
 if [ -n "${SMTP_SENDER:-}" ]; then ENV_VARS="${ENV_VARS}:SMTP_SENDER=${SMTP_SENDER}"; fi
-if [ -n "${SENDGRID_API_KEY:-}" ]; then ENV_VARS="${ENV_VARS}:SENDGRID_API_KEY=${SENDGRID_API_KEY}"; fi
+
+# Build Google Secret Manager secret bindings (--set-secrets) for sensitive credentials
+SECRET_ARGS=()
+if [ -n "${SECRET_SMTP_PASSWORD:-}" ]; then
+    SECRET_ARGS+=("--set-secrets=SMTP_PASSWORD=${SECRET_SMTP_PASSWORD}")
+fi
+if [ -n "${SECRET_SENDGRID_API_KEY:-}" ]; then
+    SECRET_ARGS+=("--set-secrets=SENDGRID_API_KEY=${SECRET_SENDGRID_API_KEY}")
+fi
 
 # 4. Build and Deploy Container to Cloud Run
 echo "[4/5] Deploying Container to Google Cloud Run..."
@@ -98,6 +116,7 @@ gcloud run deploy "${SERVICE_NAME}" \
     --no-allow-unauthenticated \
     --port=8080 \
     --set-env-vars="^:^${ENV_VARS}" \
+    "${SECRET_ARGS[@]}" \
     --platform=managed \
     --quiet
 

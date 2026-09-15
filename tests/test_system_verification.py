@@ -1,19 +1,25 @@
 """
-Comprehensive Functional & System Verification Test Suite (FUNC-01 through FUNC-12)
-Implements the test cases defined in TEST_PLAN.md to verify all functions of the JIT Policy Elevator system.
+Comprehensive Functional & Security Verification Test Suite
+Implements:
+  - FUNC-01 through FUNC-12 (System Functional Verification Matrix)
+  - SEC-01 through SEC-09 (Security Remediation & Vulnerability Regression Matrix)
 """
 
 import os
 import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
 # Ensure policy_elevator module directory is in python path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_DIR))
 
-from main import app, iam_mgr, audit_mgr, watchdog_agent
-from models import ElevationStatus, WatchdogActivityState
+from main import app, iam_mgr, audit_mgr, watchdog_agent, canonicalize_email
+from models import ElevationRequest, ElevationStatus, WatchdogActivityState
+from watchdog import WatchdogAgent
+from notifier import build_approver_notification_html
 
 # Force mock mode for deterministic system verification
 iam_mgr.mock_mode = True
@@ -21,6 +27,10 @@ audit_mgr.use_firestore = False
 
 client = TestClient(app)
 
+
+# =====================================================================
+# PART 1: SYSTEM FUNCTIONAL VERIFICATION SUITE (FUNC-01 through FUNC-12)
+# =====================================================================
 
 def test_func_01_service_health_and_readiness():
     """FUNC-01: Verify service health and readiness endpoint."""
@@ -228,6 +238,7 @@ def test_func_08_independent_post_revocation_reverification():
 
 def test_func_09_watchdog_telemetry_and_auto_rollback():
     """FUNC-09: Verify Watchdog activity monitoring state machine and automatic rollback."""
+    import asyncio
     create_payload = {
         "requester_email": "watchdog.tester@rwintrob.altostrat.com",
         "target_project_id": "prj-func09-watchdog",
@@ -254,8 +265,6 @@ def test_func_09_watchdog_telemetry_and_auto_rollback():
     assert sim_resp.json()["status"] == "SUCCESS"
 
     # Simulate elapsed quiet window to trigger Watchdog auto-rollback
-    import asyncio
-    req_obj = audit_mgr.get_request(req_id)
     summary = watchdog_agent.get_summary(req_id)
     summary.last_activity_at = datetime.now(timezone.utc) - timedelta(seconds=watchdog_agent.idle_quiet_seconds + 5)
 
@@ -335,3 +344,175 @@ def test_func_12_notification_config_and_test_dispatch():
     test_data = test_resp.json()
     assert test_data["success"] is True
     assert "details" in test_data
+
+
+# =====================================================================
+# PART 2: SECURITY REMEDIATION VERIFICATION SUITE (SEC-01 through SEC-09)
+# =====================================================================
+
+def test_sec_01_caller_verification_blocks_approver_spoofing():
+    """SEC-01 (FINDING-01): Verify authenticated caller cannot spoof approver_email or approve others' requests."""
+    create_payload = {
+        "requester_email": "bob@rwintrob.altostrat.com",
+        "target_project_id": "prj-sec01-banking",
+        "role": "roles/resourcemanager.projectIamAdmin",
+        "justification": "SEC-01 test caller verification on approve endpoint",
+        "duration_minutes": 60,
+        "approver_email": "security-lead@rwintrob.altostrat.com"
+    }
+    req_id = client.post("/api/requests", json=create_payload).json()["request_id"]
+
+    # 1. Attacker Bob tries to self-approve by spoofing security-lead in the JSON body
+    spoof_resp = client.post(
+        f"/api/requests/{req_id}/approve",
+        json={"approver_email": "security-lead@rwintrob.altostrat.com", "approved": True},
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:bob@rwintrob.altostrat.com"}
+    )
+    assert spoof_resp.status_code == 403
+    assert "Spoofing Denied" in spoof_resp.json()["detail"] or "Separation of Duties" in spoof_resp.json()["detail"]
+
+    # 2. Unrelated third user Charlie tries to approve request designated for security-lead
+    third_party_resp = client.post(
+        f"/api/requests/{req_id}/approve",
+        json={"approver_email": "charlie@rwintrob.altostrat.com", "approved": True},
+        headers={"X-Goog-Authenticated-User-Email": "accounts.google.com:charlie@rwintrob.altostrat.com"}
+    )
+    assert third_party_resp.status_code == 403
+    assert "not the designated approver" in third_party_resp.json()["detail"]
+
+
+def test_sec_02_cel_condition_injection_blocked():
+    """SEC-02 (FINDING-02): Verify CEL injection payloads in target_project_id are strictly rejected."""
+    malicious_project_id = 'test") || true || resource.name.startsWith("'
+
+    # 1. API endpoint validation via Pydantic regex
+    resp = client.post("/api/requests", json={
+        "requester_email": "attacker@rwintrob.altostrat.com",
+        "target_project_id": malicious_project_id,
+        "role": "roles/orgpolicy.policyAdmin",
+        "justification": "Attempting CEL condition injection attack",
+        "duration_minutes": 60,
+        "approver_email": "admin@rwintrob.altostrat.com"
+    })
+    assert resp.status_code == 422
+
+    # 2. Direct IAMManager runtime validation
+    with pytest.raises(ValueError, match="Invalid GCP Project ID"):
+        iam_mgr.grant_project_role(malicious_project_id, "attacker@rwintrob.altostrat.com")
+
+
+def test_sec_03_separation_of_duties_email_canonicalization():
+    """SEC-03 (FINDING-03): Verify +tag subaddressing and dot-aliasing SoD bypasses are blocked."""
+    assert canonicalize_email("alice.smith+approver@rwintrob.altostrat.com") == "alicesmith@rwintrob.altostrat.com"
+    assert canonicalize_email("a.l.i.c.e.s.m.i.t.h@rwintrob.altostrat.com") == "alicesmith@rwintrob.altostrat.com"
+
+    # Attempt to create request with subaddressed alias of same user
+    resp = client.post("/api/requests", json={
+        "requester_email": "alice.smith@rwintrob.altostrat.com",
+        "target_project_id": "prj-sec03-sod",
+        "role": "roles/secretmanager.admin",
+        "justification": "Testing subaddressing SoD bypass attempt",
+        "duration_minutes": 30,
+        "approver_email": "alicesmith+security@rwintrob.altostrat.com"
+    })
+    assert resp.status_code == 400
+    assert "Separation of Duties violation" in resp.json()["detail"]
+
+
+def test_sec_04_dom_xss_inline_onclick_remediated():
+    """SEC-04 (FINDING-04): Verify static/js/app.js does not interpolate strings into inline onclick filter handlers."""
+    app_js_path = BASE_DIR / "static" / "js" / "app.js"
+    content = app_js_path.read_text(encoding="utf-8")
+
+    # Ensure vulnerable inline onclick="filterBy..." handlers are absent
+    assert 'onclick="filterByProject(' not in content
+    assert 'onclick="filterByRequester(' not in content
+    assert 'onclick="filterByApprover(' not in content
+    assert 'onclick="filterByRequestId(' not in content
+
+    # Ensure safe dataset attribute rendering and listener attachment exist
+    assert 'data-filter-type="project"' in content
+    assert "attachFilterClickListeners" in content
+
+
+def test_sec_05_least_privilege_custom_role_in_deploy_sh():
+    """SEC-05 (FINDING-05): Verify deploy.sh provisions minimal custom role instead of global organizationAdmin."""
+    deploy_sh_path = BASE_DIR / "deploy.sh"
+    content = deploy_sh_path.read_text(encoding="utf-8")
+
+    assert 'CUSTOM_ROLE_ID="jitPolicyElevatorBroker"' in content
+    assert "resourcemanager.organizations.getIamPolicy,resourcemanager.organizations.setIamPolicy" in content
+    assert "roles/resourcemanager.organizationAdmin" not in content
+
+
+def test_sec_06_html_injection_in_email_notifications_escaped():
+    """SEC-06 (FINDING-06): Verify HTML tags and phishing payloads in request fields are escaped in email HTML."""
+    phishing_req = ElevationRequest(
+        request_id="sec06xss",
+        requester_email='attacker@rwintrob.altostrat.com"><script>alert(1)</script>',
+        target_project_id="prj-sec06-test",
+        role="roles/viewer",
+        justification='Urgent fix <a href="https://evil-phish.com">CLICK HERE TO LOGIN</a>',
+        duration_minutes=15,
+        approver_email="vp@rwintrob.altostrat.com"
+    )
+    rendered_html = build_approver_notification_html(phishing_req)
+
+    # Verify raw unescaped HTML tags are NOT present
+    assert '<a href="https://evil-phish.com">' not in rendered_html
+    assert "<script>alert(1)</script>" not in rendered_html
+
+    # Verify escaped entities ARE present
+    assert "&lt;a href=&quot;https://evil-phish.com&quot;&gt;" in rendered_html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered_html
+
+
+def test_sec_07_watchdog_production_default_mock_mode_disabled(monkeypatch):
+    """SEC-07 (FINDING-07): Verify WatchdogAgent defaults to mock_mode=False and 180s quiet window in production."""
+    monkeypatch.delenv("ENABLE_MOCK_WATCHDOG", raising=False)
+    monkeypatch.delenv("WATCHDOG_QUIET_SECONDS", raising=False)
+
+    prod_watchdog = WatchdogAgent()
+    assert prod_watchdog.mock_mode is False
+    assert prod_watchdog.idle_quiet_seconds == 180
+
+
+def test_sec_08_revocation_verification_detects_unconditioned_bindings():
+    """SEC-08 (FINDING-08): Verify verify_permission_removed fails if member retains an unconditioned org-wide binding."""
+    project_id = "prj-sec08-verify"
+    member_email = "persistent.admin@rwintrob.altostrat.com"
+    role = "roles/orgpolicy.policyAdmin"
+
+    # 1. Grant conditional JIT binding
+    iam_mgr.grant_project_role(project_id, member_email, role=role)
+
+    # 2. Inject an unconditioned permanent binding for the same user & role into the org policy
+    org_id = iam_mgr._get_org_id(project_id)
+    policy = iam_mgr._mock_org_policies[org_id]
+    policy["bindings"].append({
+        "role": role,
+        "members": [f"user:{member_email}"]
+        # Notice: condition is None (global unconditional binding)
+    })
+
+    # 3. Revoke the conditional JIT binding
+    iam_mgr.revoke_project_role(project_id, member_email, role=role)
+
+    # 4. Verify permission removal -> MUST return verified_removed=False because unconditional binding persists!
+    v_result = iam_mgr.verify_permission_removed(project_id, member_email, role=role)
+    assert v_result.verified_removed is False
+    assert "VERIFICATION FAILURE" in v_result.details
+
+    # Cleanup injected unconditional binding
+    policy["bindings"] = [b for b in policy["bindings"] if b.get("condition") is not None]
+
+
+def test_sec_09_secret_manager_and_no_hardcoded_org_id():
+    """SEC-09 (FINDING-09): Verify deploy.sh uses --set-secrets and removes hardcoded org ID 527512186146."""
+    deploy_sh_path = BASE_DIR / "deploy.sh"
+    deploy_content = deploy_sh_path.read_text(encoding="utf-8")
+    iam_content = (BASE_DIR / "iam_manager.py").read_text(encoding="utf-8")
+
+    assert "527512186146" not in deploy_content
+    assert "527512186146" not in iam_content
+    assert "--set-secrets=" in deploy_content

@@ -1,7 +1,10 @@
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+GCP_PROJECT_ID_REGEX = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -34,7 +37,7 @@ class RoleOption(BaseModel):
     category: str = Field(default="Governance & Security", description="Role categorization")
 
 class ElevationRequestCreate(BaseModel):
-    requester_email: str = Field(..., description="Email identity of the user requesting JIT elevation")
+    requester_email: Optional[str] = Field(None, description="Email identity of the user requesting JIT elevation")
     target_project_id: str = Field(..., description="GCP Target Project ID where permission will be elevated")
     role: str = Field(default="roles/orgpolicy.policyAdmin", description="IAM role requested for JIT elevation")
     justification: str = Field(..., min_length=10, description="Mandatory business justification for elevation")
@@ -42,8 +45,18 @@ class ElevationRequestCreate(BaseModel):
     approver_email: str = Field(..., description="Email identity of the designated approver")
     notify_approver_email: bool = Field(default=True, description="Whether to send an email notification to designated approver")
 
+    @field_validator("target_project_id")
+    @classmethod
+    def validate_gcp_project_id(cls, v: str) -> str:
+        clean_id = (v or "").strip()
+        if not GCP_PROJECT_ID_REGEX.match(clean_id):
+            raise ValueError(
+                f"Invalid GCP Project ID '{v}'. Must be 6-30 characters, lowercase letters, digits, or hyphens, starting with a letter."
+            )
+        return clean_id
+
 class ApprovalAction(BaseModel):
-    approver_email: str = Field(..., description="Email identity of the approving party")
+    approver_email: Optional[str] = Field(None, description="Optional email identity of the approving party (verified against authenticated caller)")
     approved: bool = Field(..., description="True to approve, False to reject")
     comments: Optional[str] = Field(None, description="Optional comments from approver")
 
